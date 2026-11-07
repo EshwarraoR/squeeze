@@ -27,7 +27,7 @@ h1{font:700 2.3rem/1 Georgia,"Times New Roman",serif;letter-spacing:-.02em;margi
 #drop span{color:var(--muted);font-size:.92rem}
 #drop input{position:absolute;opacity:0;width:1px;height:1px}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:20px 0}
-button,select,input[type=number]{font:inherit;color:var(--ink)}
+button,select,input[type=number],input[type=text]{font:inherit;color:var(--ink)}
 button,.res a{border:2px solid var(--edge);background:var(--surface);border-radius:10px;padding:10px 16px;min-height:46px;font-weight:600;cursor:pointer;box-shadow:3px 3px 0 var(--shadow);transition:transform .12s,box-shadow .12s;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;color:var(--ink)}
 button:hover:not(:disabled),.res a:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--shadow)}
 button:active:not(:disabled),.res a:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--shadow)}
@@ -38,7 +38,7 @@ button.loading:disabled{opacity:1;box-shadow:3px 3px 0 var(--shadow)}
 button.loading::before,.spin{content:"";display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
 .spin{color:var(--muted);vertical-align:-2px;margin-right:6px}
 :focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-select,input[type=number]{border:2px solid var(--edge);background:var(--bg);border-radius:8px;padding:8px 10px;min-height:44px;max-width:100%}
+select,input[type=number],input[type=text]{border:2px solid var(--edge);background:var(--bg);border-radius:8px;padding:8px 10px;min-height:44px;max-width:100%}
 input[type=number]{width:100px}
 .file{position:relative;overflow:hidden;background:var(--surface);border:2px solid var(--edge);border-radius:14px;padding:16px 14px 14px;margin:0 6px 18px 0;box-shadow:5px 5px 0 var(--shadow)}
 .file.in{animation:rise .38s cubic-bezier(.2,.8,.2,1) both}
@@ -67,6 +67,15 @@ button.x:hover:not(:disabled){transform:rotate(90deg);box-shadow:none;background
 @keyframes blink{50%{opacity:0}}
 @media (max-width:520px){h1{font-size:1.9rem}.bar button{flex:1 1 140px}}
 @media (prefers-reduced-motion:reduce){*,::before,::after{animation-duration:1.5s!important;transition:none!important}.file.in,.res.in{animation:none!important}}
+.cmp{position:relative;height:280px;margin-top:14px;border:2px solid var(--edge);border-radius:10px;overflow:hidden;background:repeating-conic-gradient(var(--line) 0 25%,transparent 0 50%) 0 0/16px 16px;--p:50%}
+.cmp img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.cmp .after{clip-path:inset(0 0 0 var(--p))}
+.cmp::after{content:"";position:absolute;top:0;bottom:0;left:var(--p);width:3px;margin-left:-1px;background:var(--accent);pointer-events:none}
+.cmp .tag{position:absolute;bottom:8px;background:var(--surface);color:var(--ink);border:2px solid var(--edge);border-radius:6px;padding:1px 7px;font:700 .68rem ui-monospace,Consolas,monospace}
+.cmp .l{left:8px}.cmp .r{right:8px}
+.cmp input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
+.cmp:focus-within{outline:3px solid var(--accent);outline-offset:3px}
+.file.locked .opts{display:none}
 </style>
 </head>
 <body>
@@ -83,10 +92,12 @@ button.x:hover:not(:disabled){transform:rotate(90deg);box-shadow:none;background
 
 <div class="bar">
   <button class="primary" id="go" disabled><span class="lbl">Convert all</span></button>
+  <button id="merge" disabled>Merge images → PDF</button>
   <button id="zipAll" disabled>Download all as ZIP</button>
   <button id="clear" disabled>Clear</button>
 </div>
 
+<div class="file" style="margin-bottom:18px"><div class="opts" style="margin-top:0"><label>Batch name pattern<input id="pat" type="text" placeholder="{name}" autocomplete="off" spellcheck="false"></label><div class="meta" style="align-self:end">Use {name}, {n} (01, 02…) and {date}. Remembered next time.</div></div></div>
 <div id="list"><p class="empty">No files yet.</p></div>
 
 <section class="limits">
@@ -95,7 +106,7 @@ button.x:hover:not(:disabled){transform:rotate(90deg);box-shadow:none;background
     <li>Images (PNG, JPG, WebP, GIF, BMP, SVG, AVIF) convert to PNG, JPG, JPEG, WebP, AVIF*, PDF, ZIP or GZ. Set a target size and the quality, then dimensions, are reduced until it fits.</li>
     <li>CSV ⇄ JSON, Markdown/Text → HTML, HTML → Text, plus Markdown/Text conversions.</li>
     <li>Any file can be packed into ZIP or GZ. Lossless compression has a floor, so already-compressed files (MP4, MP3, ZIP) may not shrink to your target; the result says so.</li>
-    <li>Video, audio, Office documents and PDF-to-image conversion need server tools and are not supported in a static page.</li>
+    <li>PDFs convert to PNG/JPG pages or split into single-page files, and several images can be merged into one PDF (a small library loads on first use). Video, audio and Office documents are not supported in a static page.</li>
     <li>*AVIF output depends on your browser.</li>
   </ul>
 </section>
@@ -105,14 +116,28 @@ button.x:hover:not(:disabled){transform:rotate(90deg);box-shadow:none;background
 const $=s=>document.querySelector(s);
 const list=$('#list'), pick=$('#pick'), drop=$('#drop');
 let files=[], uid=0, running=false;
+let S={out:{},pattern:''};
+try{S=Object.assign(S,JSON.parse(localStorage.getItem('squeeze.v1')||'{}'));S.out=S.out||{}}catch(_){}
+const readData=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b)});
+const save=()=>{try{localStorage.setItem('squeeze.v1',JSON.stringify(S))}catch(_){}};
+const today=new Date().toISOString().slice(0,10);
+const clean=x=>x.replace(/[\\/:*?"<>|\u0000-\u001f]/g,'').trim().replace(/^\.+/,'');
+function nameFor(b,i,over){
+  if(over&&clean(over))return clean(over).replace(/\.(png|jpe?g|webp|avif|pdf|zip|gz|json|csv|txt|md|html?)$/i,'')||b;
+  const p=(S.pattern||'{name}').replace(/\{name\}/g,b).replace(/\{n\}/g,String(i+1).padStart(2,'0')).replace(/\{date\}/g,today);
+  return clean(p)||b;
+}
+const outBase=f=>nameFor(base(f.file.name),files.indexOf(f),f.rename);
+const optLabel=(k,x)=>k==='pdf'&&(x==='png'||x==='jpg')?x.toUpperCase()+' (each page)':x==='split'?'Split pages (ZIP)':x.toUpperCase();
 const IMG_EXT=['png','jpg','jpeg','webp','gif','bmp','svg','avif','ico'];
 const MIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',avif:'image/avif'};
 const TEXT_OUT={csv:['json','txt'],json:['csv','txt'],md:['html','txt'],txt:['html','md'],html:['txt','md'],htm:['txt','md']};
 
 const ext=n=>(n.split('.').pop()||'').toLowerCase();
 const base=n=>n.replace(/\.[^.]+$/,'');
-function kindOf(f){const e=ext(f.name);return (f.type.startsWith('image/')||IMG_EXT.includes(e))?'image':(TEXT_OUT[e]?e:'other')}
+function kindOf(f){const e=ext(f.name);if(e==='pdf'||f.type==='application/pdf')return 'pdf';return (f.type.startsWith('image/')||IMG_EXT.includes(e))?'image':(TEXT_OUT[e]?e:'other')}
 function outputs(k){
+  if(k==='pdf')return['png','jpg','split','zip','gz'];
   if(k==='image')return['png','jpg','jpeg','webp','avif','pdf','zip','gz'];
   return[...(TEXT_OUT[k]||[]),'zip','gz'];
 }
@@ -120,7 +145,7 @@ function fmt(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+'
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function add(fl){
-  for(const f of fl){const k=kindOf(f);files.push({id:++uid,file:f,kind:k,out:outputs(k)[0],target:'',unit:f.size>=1048576?1048576:1024,state:'idle',anim:true})}
+  for(const f of fl){const k=kindOf(f);files.push({id:++uid,file:f,kind:k,out:outputs(k).includes(S.out[k])?S.out[k]:outputs(k)[0],target:'',unit:f.size>=1048576?1048576:1024,state:'idle',anim:true})}
   render();
 }
 pick.onchange=()=>{add([...pick.files]);pick.value=''};
@@ -129,24 +154,26 @@ pick.onchange=()=>{add([...pick.files]);pick.value=''};
 drop.addEventListener('drop',ev=>add([...ev.dataTransfer.files]));
 
 function render(){
-  $('#go').disabled=running||!files.length;$('#clear').disabled=!files.length;
+  $('#go').disabled=running||!files.length;$('#merge').disabled=running||files.filter(f=>f.kind==='image').length<2;$('#clear').disabled=!files.length;
   $('#zipAll').disabled=!files.some(f=>f.blob);
   if(!files.length){list.innerHTML='<p class="empty">No files yet.</p>';return}
   list.innerHTML=files.map(f=>{
-    const o=outputs(f.kind).map(x=>`<option value="${x}"${x===f.out?' selected':''}>${x.toUpperCase()}</option>`).join('');
+    const o=outputs(f.kind).map(x=>`<option value="${x}"${x===f.out?' selected':''}>${optLabel(f.kind,x)}</option>`).join('');
     let res='';
     if(f.state==='busy')res='<div class="res"><span class="note"><i class="spin"></i>Working…</span></div>';
     else if(f.state==='error')res=`<div class="res"><span class="note bad">${esc(f.msg)}</span></div>`;
     else if(f.blob){
       const pct=f.file.size?Math.round((1-f.blob.size/f.file.size)*100):0;
-      res=`<div class="res${f.doneAnim?' in':''}"><span class="note ${f.msgClass||'ok'}">${fmt(f.file.size)} → <b>${fmt(f.blob.size)}</b> <span class="meta">[${f.blob.size.toLocaleString()} bytes]</span> (${pct>=0?pct+'% smaller':(-pct)+'% larger'})${f.msg?'<br>'+esc(f.msg):''}</span><a href="${f.url}" download="${esc(f.outName)}">Download ${esc(f.outName)}</a>${CAN_SHARE?'<button data-act="share">Share / save copy</button>':''}</div>`;
+      res=`<div class="res${f.doneAnim?' in':''}"><span class="note ${f.msgClass||'ok'}">${fmt(f.file.size)} → <b>${fmt(f.blob.size)}</b> <span class="meta">[${f.blob.size.toLocaleString()} bytes]</span> (${pct>=0?pct+'% smaller':(-pct)+'% larger'})${f.msg?'<br>'+esc(f.msg):''}</span><a href="${f.url}" download="${esc(f.outName)}">Download ${esc(f.outName)}</a>${CAN_SHARE?'<button data-act="share">Share / save copy</button>':''}${f.canCmp?'<button data-act="cmpbtn">'+(f.cmp?'Hide compare':'Compare')+'</button>':''}</div>${f.cmp&&f.oData?`<div class="cmp"><img src="${f.oData}" alt="Original"><img class="after" src="${f.pData}" alt="Result"><span class="tag l">Original · ${fmt(f.file.size)}</span><span class="tag r">Result · ${fmt(f.blob.size)}</span><input type="range" min="0" max="100" value="50" data-act="cmp" aria-label="Drag to compare original and result"></div>`:''}`;
     }
-    return `<div class="file${f.anim?' in':''}${f.state==='busy'?' busy':''}" data-id="${f.id}">
+    return `<div class="file${f.anim?' in':''}${f.state==='busy'?' busy':''}${f.locked?' locked':''}" data-id="${f.id}">
       <div class="top"><div><div class="name">${esc(f.file.name)}</div><div class="meta">${fmt(f.file.size)} · ${f.kind==='image'?'image':f.kind==='other'?'file':f.kind.toUpperCase()}</div></div>
       <button class="x" data-act="rm" aria-label="Remove ${esc(f.file.name)}">✕</button></div>
       <div class="opts">
         <label>Convert to<select data-act="out">${o}</select></label>
         <label>Target size · current ${fmt(f.file.size)}<div class="row"><input type="number" min="0" step="any" inputmode="decimal" placeholder="${(f.file.size/f.unit).toFixed(2)} (same)" value="${f.target}" data-act="target"><select data-act="unit"><option value="1024"${f.unit==1024?' selected':''}>KB</option><option value="1048576"${f.unit==1048576?' selected':''}>MB</option></select></div></label>
+        ${f.kind==='image'?`<label>Resize (px, optional)<div class="row"><input type="number" min="1" inputmode="numeric" placeholder="width" value="${f.rw||''}" data-act="rw" aria-label="Width in pixels"><input type="number" min="1" inputmode="numeric" placeholder="height" value="${f.rh||''}" data-act="rh" aria-label="Height in pixels"></div></label>`:''}
+        <label>Output name<input type="text" autocomplete="off" spellcheck="false" placeholder="${esc(nameFor(base(f.file.name),files.indexOf(f),''))}" value="${esc(f.rename||'')}" data-act="rename"></label>
       </div>${res}</div>`;
   }).join('');
   files.forEach(f=>{f.anim=false;f.doneAnim=false});
@@ -157,15 +184,19 @@ try{CAN_SHARE=!!(navigator.canShare&&navigator.canShare({files:[new File(['x'],'
 list.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act]');if(!b)return;const f=find(b);
   if(b.dataset.act==='rm'){if(f.url)URL.revokeObjectURL(f.url);files=files.filter(x=>x!==f);render()}
+  if(b.dataset.act==='cmpbtn'){
+    if(f.cmp){f.cmp=false;render()}
+    else{b.disabled=true;Promise.all([readData(f.file),readData(f.blob)]).then(([o,p])=>{f.oData=o;f.pData=p;f.cmp=true}).catch(()=>{}).finally(render)}
+  }
   if(b.dataset.act==='share'&&f.blob){navigator.share({files:[new File([f.blob],f.outName,{type:f.blob.type})]}).catch(()=>{})}
 });
-list.addEventListener('change',e=>{const a=e.target.dataset.act,f=find(e.target);if(a==='out'){f.out=e.target.value;clearRes(f);render()}if(a==='unit'){f.unit=+e.target.value;clearRes(f);render()}
-  if(a==='target'){clearRes(f);render()}});
-list.addEventListener('input',e=>{if(e.target.dataset.act==='target')find(e.target).target=e.target.value});
-function clearRes(f){if(f.url)URL.revokeObjectURL(f.url);f.blob=f.url=null;f.msg='';f.state='idle'}
+list.addEventListener('change',e=>{const a=e.target.dataset.act,f=find(e.target);if(a==='out'){f.out=e.target.value;S.out[f.kind]=f.out;save();clearRes(f);render()}if(a==='unit'){f.unit=+e.target.value;clearRes(f);render()}
+  if(['target','rw','rh','rename'].includes(a)){clearRes(f);render()}});
+list.addEventListener('input',e=>{const a=e.target.dataset.act;if(['target','rw','rh','rename'].includes(a))find(e.target)[a]=e.target.value;if(a==='cmp')e.target.closest('.cmp').style.setProperty('--p',e.target.value+'%')});
+function clearRes(f){f.canCmp=false;f.oData=f.pData=null;f.cmp=false;if(f.url)URL.revokeObjectURL(f.url);f.blob=f.url=null;f.msg='';f.state='idle'}
 
 $('#clear').onclick=()=>{files.forEach(clearRes);files=[];render()};
-$('#go').onclick=async()=>{running=true;const b=$('#go'),l=b.firstElementChild;b.classList.add('loading');l.textContent='Converting…';render();try{for(const f of files)await run(f)}finally{running=false;b.classList.remove('loading');l.textContent='Convert all';render()}};
+$('#go').onclick=async()=>{running=true;const b=$('#go'),l=b.firstElementChild;b.classList.add('loading');l.textContent='Converting…';render();try{for(const f of files)if(!f.locked)await run(f)}finally{running=false;b.classList.remove('loading');l.textContent='Convert all';render()}};
 $('#zipAll').onclick=async()=>{
   const z=new JSZip();const used=new Set();
   files.filter(f=>f.blob).forEach(f=>{let n=f.outName,i=1;while(used.has(n))n=`${base(f.outName)}(${i++}).${ext(f.outName)}`;used.add(n);z.file(n,f.blob)});
@@ -178,24 +209,34 @@ async function run(f){
   try{
     const t=f.target?Math.round(parseFloat(f.target)*f.unit):0;
     let blob,name,msg='';
-    const b=base(f.file.name);
+    const b=outBase(f),rs={rw:+f.rw||0,rh:+f.rh||0};
     if(f.kind==='image'&&MIME[f.out]){
-      ({blob,msg}=await imageTo(f.file,MIME[f.out],t));
+      ({blob,msg}=await imageTo(f.file,MIME[f.out],t,false,rs));
       name=`${b}.${f.out}`;
     }else if(f.kind==='image'&&f.out==='pdf'){
-      const r=await imageTo(f.file,'image/jpeg',t,true);
-      blob=await makePdf(r.blob,r.w,r.h);msg=r.msg;name=b+'.pdf';
+      const r=await imageTo(f.file,'image/jpeg',t,true,rs);
+      blob=await makePdf([r]);msg=r.msg;name=b+'.pdf';
+    }else if(f.kind==='pdf'&&(f.out==='png'||f.out==='jpg')){
+      const pages=await pdfPages(f.file,f.out,t);
+      if(pages.length===1){blob=pages[0];name=`${b}.${f.out}`}
+      else{const z=new JSZip();pages.forEach((p,i)=>z.file(`${b}-page-${i+1}.${f.out}`,p));blob=await z.generateAsync({type:'blob'});name=b+'.zip'}
+      msg=pages.length+(pages.length===1?' page':' pages')+' converted.';
+    }else if(f.kind==='pdf'&&f.out==='split'){
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js');
+      const src=await PDFLib.PDFDocument.load(await f.file.arrayBuffer()),n=src.getPageCount(),z=new JSZip();
+      for(let i=0;i<n;i++){const d=await PDFLib.PDFDocument.create(),[p]=await d.copyPages(src,[i]);d.addPage(p);z.file(`${b}-page-${i+1}.pdf`,await d.save())}
+      blob=await z.generateAsync({type:'blob'});name=b+'.zip';msg='Split into '+n+' separate PDF'+(n===1?'':'s')+'.';
     }else if(f.out==='zip'){
       const z=new JSZip();z.file(f.file.name,f.file);
       blob=await z.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:9}});name=b+'.zip';
     }else if(f.out==='gz'){
-      blob=await new Response(f.file.stream().pipeThrough(new CompressionStream('gzip'))).blob();name=f.file.name+'.gz';
+      blob=await new Response(f.file.stream().pipeThrough(new CompressionStream('gzip'))).blob();name=b+(f.file.name.includes('.')?'.'+ext(f.file.name):'')+'.gz';
     }else{
       const txt=await f.file.text();
       const r=convertText(txt,f.kind,f.out);
       blob=new Blob([r.text],{type:r.type});name=`${b}.${f.out}`;
     }
-    if(blob.type.split('/')[1]&&MIME[f.out]&&blob.type!==MIME[f.out])msg='This browser cannot write '+f.out.toUpperCase()+'; saved as '+blob.type.split('/')[1].toUpperCase()+' instead.';
+    if(blob.type.startsWith('image/')&&MIME[f.out]&&blob.type!==MIME[f.out])msg='This browser cannot write '+f.out.toUpperCase()+'; saved as '+blob.type.split('/')[1].toUpperCase()+' instead.';
     if(t&&!msg){
       if(blob.size>t){msg='Smallest possible for this format: '+fmt(blob.size)+'. Choose a lossy format (JPG/WebP) to go lower.';f.msgClass='warn'}
       else if(['zip','gz'].includes(f.out)||!MIME[f.out]&&f.out!=='pdf'){msg='Already under your target.'}
@@ -206,13 +247,13 @@ async function run(f){
     const bytes=await blob.arrayBuffer();
     blob=new Blob([bytes],{type:blob.type||'application/octet-stream'});
     if(blob.size!==bytes.byteLength)throw new Error('Size check failed; please convert again');
-    f.blob=blob;f.url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));f.outName=name;f.msg=msg;f.state='done';f.doneAnim=true;
+    f.blob=blob;f.url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));f.outName=name;f.msg=msg;f.state='done';f.doneAnim=true;f.canCmp=f.kind==='image'&&blob.type.startsWith('image/');
   }catch(e){f.state='error';f.msg='Could not convert: '+(e.message||e)}
   render();
 }
 
 /* ---------- images ---------- */
-const loadScript=src=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)});
+const loadScript=src=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('Could not load a required library. Check your internet connection and try again.'));document.head.appendChild(s)});
 async function loadImg(file){
   const e=ext(file.name);let src=file;
   if(e==='svg'&&file.type!=='image/svg+xml')src=new Blob([file],{type:'image/svg+xml'});
@@ -232,9 +273,10 @@ async function loadImg(file){
 }
 const toBlob=(c,type,q)=>new Promise(r=>c.toBlob(r,type,q));
 function draw(img,w,h,flat){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');if(flat){x.fillStyle='#fff';x.fillRect(0,0,w,h)}x.drawImage(img,0,0,w,h);return c}
-async function imageTo(file,type,target,forPdf){
+async function imageTo(file,type,target,forPdf,rs){
   const img=await loadImg(file);
   let W=img.naturalWidth||img.width||1024,H=img.naturalHeight||img.height||1024;
+  if(rs&&(rs.rw||rs.rh)){const k=rs.rw&&rs.rh?Math.min(rs.rw/W,rs.rh/H):rs.rw?rs.rw/W:rs.rh/H;W=Math.max(1,Math.round(W*k));H=Math.max(1,Math.round(H*k))}
   const flat=type==='image/jpeg',lossy=type!=='image/png';
   let scale=1,blob,msg='';
   for(let step=0;step<14;step++){
@@ -263,23 +305,58 @@ async function imageTo(file,type,target,forPdf){
   }
   return{blob,w:Math.round(W*scale),h:Math.round(H*scale),msg:'Could not reach the target without making the image unusable; this is the smallest result.'}
 }
-async function makePdf(jpg,w,h){
-  const data=new Uint8Array(await jpg.arrayBuffer()),enc=new TextEncoder(),parts=[],off=[];let len=0;
+async function makePdf(pages){
+  const enc=new TextEncoder(),parts=[],off=[];let len=0;
   const put=x=>{const u=typeof x==='string'?enc.encode(x):x;parts.push(u);len+=u.length};
-  const pw=595,ph=Math.round(pw*h/w);
-  put('%PDF-1.4\n');
   const obj=(n,body)=>{off[n]=len;put(`${n} 0 obj\n${body}\nendobj\n`)};
+  const N=pages.length;
+  put('%PDF-1.4\n');
   obj(1,'<< /Type /Catalog /Pages 2 0 R >>');
-  obj(2,'<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  obj(3,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
-  off[4]=len;put(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${data.length} >>\nstream\n`);put(data);put('\nendstream\nendobj\n');
-  const cs=`q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;
-  obj(5,`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`);
-  const xr=len;let x='xref\n0 6\n0000000000 65535 f \n';
-  for(let i=1;i<=5;i++)x+=String(off[i]).padStart(10,'0')+' 00000 n \n';
-  put(x+`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`);
+  obj(2,`<< /Type /Pages /Kids [${pages.map((_,i)=>`${3+i*3} 0 R`).join(' ')}] /Count ${N} >>`);
+  for(let i=0;i<N;i++){
+    const p=pages[i],data=new Uint8Array(await p.blob.arrayBuffer()),pw=595,ph=Math.round(pw*p.h/p.w),a=3+i*3,im=a+1,c=a+2;
+    obj(a,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${c} 0 R >>`);
+    off[im]=len;put(`${im} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${data.length} >>\nstream\n`);put(data);put('\nendstream\nendobj\n');
+    const cs=`q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;obj(c,`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`);
+  }
+  const total=3+N*3,xr=len;let x=`xref\n0 ${total}\n0000000000 65535 f \n`;
+  for(let i=1;i<total;i++)x+=String(off[i]).padStart(10,'0')+' 00000 n \n';
+  put(x+`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`);
   return new Blob(parts,{type:'application/pdf'});
 }
+const PDFJS='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+async function pdfPages(file,out,t){
+  if(!window.pdfjsLib){
+    await loadScript(PDFJS+'pdf.min.js');
+    pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS+'pdf.worker.min.js';
+    try{await loadScript(PDFJS+'pdf.worker.min.js')}catch(_){}
+  }
+  const doc=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer()),verbosity:0}).promise,res=[];
+  for(let i=1;i<=doc.numPages;i++){
+    const pg=await doc.getPage(i),vp=pg.getViewport({scale:2}),c=document.createElement('canvas');
+    c.width=vp.width;c.height=vp.height;
+    const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);
+    await pg.render({canvasContext:x,viewport:vp}).promise;
+    let b=await toBlob(c,'image/png');
+    if(!(out==='png'&&!t))b=(await imageTo(new File([b],'page.png',{type:'image/png'}),MIME[out],t)).blob;
+    res.push(b);
+  }
+  return res;
+}
+$('#merge').onclick=async()=>{
+  const b=$('#merge'),imgs=files.filter(f=>f.kind==='image');if(imgs.length<2)return;
+  running=true;b.classList.add('loading');b.textContent='Merging…';render();
+  try{
+    const pages=[];
+    for(const f of imgs){const t=f.target?Math.round(parseFloat(f.target)*f.unit):0;pages.push(await imageTo(f.file,'image/jpeg',t,true,{rw:+f.rw||0,rh:+f.rh||0}))}
+    const blob=await makePdf(pages),bytes=await blob.arrayBuffer();
+    files.push({id:++uid,file:{name:`Merged PDF · ${imgs.length} images`,size:imgs.reduce((a,f)=>a+f.file.size,0)},kind:'merged',locked:true,out:'pdf',unit:1024,state:'done',blob,url:URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'})),outName:nameFor('merged',files.length)+'.pdf',msg:'',anim:true,doneAnim:true});
+  }catch(e){alert('Could not merge: '+(e.message||e))}
+  finally{running=false;b.classList.remove('loading');b.textContent='Merge images → PDF';render()}
+};
+$('#pat').value=S.pattern||'';
+$('#pat').oninput=e=>{S.pattern=e.target.value;save()};
+$('#pat').onchange=()=>{files.filter(f=>!f.locked).forEach(clearRes);render()};
 
 /* ---------- text ---------- */
 function parseCsv(s){
